@@ -1,0 +1,319 @@
+# if $reportOnly is set to true, no changes will be made but the script will report on broken inheritances in the library 
+
+$reportOnly = $true 
+
+  
+
+# $outputCSV is the path and filename of the CSV file that the script will create while running to show 
+
+# locations where permission inheritance was found to be broken 
+
+$outputCSV = "<Path for outfile>\ReInherit-AllFilesInLib.csv" 
+
+  
+
+# $siteUrl is the URL of the site or sub-site which contains the document library 
+
+#$siteUrl = "https://tenant.sharepoint.com/sites/site/subsite" 
+
+$siteUrl = "<Site URL Where the doc lib is located>" 
+
+  
+
+# $library is the name of the library where the files/folders to act on are stored 
+
+$libraryName = "Name of Library even with spaces" 
+
+  
+
+<############    YOU SHOULD NOT HAVE TO MODIFY ANYTHING BELOW THIS POINT    ############> 
+
+  
+
+# restores permission inheritance for all items in a list 
+
+function Restore-ListItemPermissionInheritance ([String]$listName)  
+
+{ 
+
+    # echo current list to the console output 
+
+    Write-Host "  Scanning list " -NoNewLine 
+
+    Write-Host "$listName" -ForegroundColor Green 
+
+  
+
+    # get all list items from the list, 2000 at a time 
+
+    $listItems = Get-PnpListItem -List $ListName -PageSize 15 
+
+  
+
+    # setup variables for the progress bar 
+
+    $k = 0 
+
+    $kActivity = "Scanning list items" 
+
+  
+
+    # begin looping through all items in the list 
+
+    foreach ($listItem in $listItems) 
+
+    { 
+
+        # increment the loop counter for list items and write to the progress bar 
+
+        $k++ 
+
+        Write-Progress -Activity $kActivity -Status "($k of $($listItems.Count))" -PercentComplete ($k/$listItems.Count * 100) 
+
+         
+
+        # check to see if the current item has unique permissions 
+
+        if (Get-PnPProperty -ClientObject $listItem -Property "HasUniqueRoleAssignments") 
+
+        { 
+
+            $script:found = $true 
+
+            # the item has unique permissions 
+
+            # echo info to the console for the item 
+
+            Write-Host "    Broken inheritance found on: " -NoNewLine -ForegroundColor Yellow 
+
+            Write-Host "$($listItem.FieldValues["FileLeafRef"]) [$($listItem.FileSystemObjectType)]" -ForegroundColor Green 
+
+  
+
+            # create a PSObject to hold the name/value pairs we want to output to our CSV file 
+
+            $resultItem = New-Object -TypeName PSObject -Property @{ 
+
+                SiteUrl  = $list.ParentWebUrl 
+
+                Type     = $listItem.FileSystemObjectType 
+
+                Filename = $listItem.FieldValues["FileLeafRef"] 
+
+                Path     = $listItem.FieldValues["FileRef"] 
+
+                Result   = "Done" 
+
+            } 
+
+  
+
+            # only perform updates if $reportOnly = $false 
+
+            if (-not $reportOnly) 
+
+            { 
+
+                # try to restore permission inheritance on the item 
+
+                try 
+
+                { 
+
+                    Set-PnPListItemPermission -List $ListName -Identity $listItem.Id -InheritPermissions -ErrorAction Stop 
+
+                } 
+
+                catch 
+
+                { 
+
+                    # output error to console and update the result item 
+
+                    Write-Host "    $($_.Exception.Message)" -ForegroundColor Red 
+
+                    $resultItem.Result = $_.Exception.Message 
+
+                } 
+
+            } 
+
+            else 
+
+            { 
+
+                $resultItem.Result = "ReportOnly" 
+
+            } 
+
+  
+
+            # add the result item to the output CSV file 
+
+            $resultItem | Select SiteUrl, Type, Filename, Path, Result | Export-Csv -Path $outputCSV -NoTypeInformation -Append 
+
+        } 
+
+    } 
+
+  
+
+    # mark the list item activity's progress bar complete 
+
+    Write-Progress -Activity $kActivity -Completed 
+
+} 
+
+  
+
+$found = $false 
+
+  
+
+# start by checking to see if the output file already exists 
+
+if ([System.IO.File]::Exists($outputCSV)) 
+
+{ 
+
+    # file already exists, append the date/time to the filename 
+
+    $outputCSV = $outputCSV.Replace(".csv", "-$(get-date -f yyyy-MM-dd-hh-mm-ss).csv") 
+
+} 
+
+  
+
+# prompt for credentials 
+
+if ($global:cred -eq $null) 
+
+{ 
+
+    $global:cred = Get-Credential -Message "Enter credentials for SharePoint Online" 
+
+    if ($global:cred -eq $null)  
+
+    { 
+
+        Write-Host "Credentials not entered. Exiting." -ForegroundColor Red 
+
+        return 
+
+    } 
+
+} 
+
+  
+
+Write-Host "" 
+
+if ($reportOnly) 
+
+{ 
+
+    Write-Host "ReportOnly " -ForegroundColor Yellow -NoNewline 
+
+    Write-Host "selected - no changes will be made!" 
+
+} 
+
+Write-Host "SiteUrl: " -NoNewline 
+
+Write-Host $siteUrl -ForegroundColor Green 
+
+Write-Host "Library: " -NoNewline 
+
+Write-Host $libraryName -ForegroundColor Green 
+
+  
+
+  
+
+# connect to the site 
+
+try 
+
+{ 
+
+    # Connect to the SharePoint site W/O MFA authentication: 
+
+    #Connect-PnPOnline -Url $siteUrl -Credentials $cred -ErrorAction Stop 
+
+     
+
+    #Use the connection below for MFA authentication 
+
+    Connect-PnPOnline -Interactive -Url $siteUrl -ErrorAction Stop 
+
+} 
+
+catch 
+
+{ 
+
+    Write-Host "$($_.Exception.Message)" -ForegroundColor Red 
+
+    Write-Host "   -- skipping --" 
+
+    # could not connect to this site, skip it 
+
+    Return 
+
+} 
+
+  
+
+# get the lists from SharePoint based on critera specified 
+
+$list = Get-PnpList -Identity $libraryName 
+
+  
+
+# call the function which will loop through all items in the library 
+
+# and restore permission inheritance 
+
+Restore-ListItemPermissionInheritance -listName $list.Title 
+
+  
+
+try 
+
+{ 
+
+    Disconnect-PnPOnline 
+
+} 
+
+catch 
+
+{ 
+
+} 
+
+  
+
+# show the script is completed 
+
+Write-Host "Script complete!" -ForegroundColor Cyan 
+
+Write-Host "" 
+
+if ($found) 
+
+{ 
+
+    Write-Host "Results written to file:" 
+
+    Write-Host " $outputCSV" -ForegroundColor Green 
+
+} 
+
+else 
+
+{ 
+
+    Write-Host "No files found in library with unique permissions!" -ForegroundColor Green 
+
+} 
